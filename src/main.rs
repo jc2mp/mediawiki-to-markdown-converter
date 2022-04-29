@@ -170,7 +170,7 @@ fn write_file(
     writeln!(file, "# {}\n", title)?;
 
     let ast = wiki_parser.parse(&text);
-    let written = write_nodes(&mut file, ast.nodes.iter())?;
+    let written = write_nodes_with_affix(&mut file, ast.nodes.iter(), |_| Ok(()), |f| writeln!(f))?;
 
     if !written {
         writeln!(file)?;
@@ -192,7 +192,6 @@ fn write_node(file: &mut File, node: &parse_wiki_text::Node) -> anyhow::Result<b
         Heading { level, nodes, .. } => {
             write!(file, "{} ", "#".repeat(*level as usize))?;
             let result = write_nodes(file, nodes.iter());
-            writeln!(file)?;
             writeln!(file)?;
             result
         }
