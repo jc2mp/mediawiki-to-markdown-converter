@@ -1,0 +1,11 @@
+[package]
+edition = "2021"
+name = "mediawiki-sqlite-to-markdown"
+version = "0.1.0"
+
+[dependencies]
+anyhow = "1.0.57"
+clap = {version = "3.1.12", features = ["derive"]}
+dunce = "1.0.2"
+parse_wiki_text = "0.1.5"
+rusqlite = {version = "0.27.0", features = ["bundled"]}
