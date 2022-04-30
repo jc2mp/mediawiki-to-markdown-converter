@@ -1,8 +1,11 @@
+use clap::{ArgEnum, Parser};
 use std::{
-    fs::File,
+    fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
 };
+
+mod old_and_bad;
 
 // This is actually from Wikipedia, but it should do the trick
 pub(crate) const CONFIGURATION_SOURCE: parse_wiki_text::ConfigurationSource =
@@ -92,36 +95,50 @@ pub(crate) const CONFIGURATION_SOURCE: parse_wiki_text::ConfigurationSource =
         redirect_magic_words: &["redirect"],
     };
 
-fn parse_args() -> anyhow::Result<(PathBuf, PathBuf)> {
-    use clap::Parser;
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum, Debug)]
+enum Mode {
+    Wikitext,
+    Markdown,
+    OldAndBad,
+}
 
-    #[derive(Parser, Debug)]
-    #[clap(author, version, about, long_about = None)]
-    struct Args {
-        /// Input database (must be a SQLite3 database)
-        #[clap(short, long)]
-        database_path: String,
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Input database (must be a SQLite3 database)
+    #[clap(short, long)]
+    database_path: PathBuf,
 
-        /// Directory to output to
-        output_directory: String,
-    }
+    /// Directory to output to
+    #[clap(short, long)]
+    output_directory: PathBuf,
 
+    /// What mode to run the program in
+    #[clap(arg_enum, short, long)]
+    mode: Mode,
+}
+
+fn parse_args() -> anyhow::Result<Args> {
     let args = Args::parse();
 
     let database_path = dunce::canonicalize(args.database_path)?;
     assert!(database_path.is_file());
 
-    std::fs::create_dir_all(&args.output_directory)?;
+    fs::create_dir_all(&args.output_directory)?;
     let output_directory = dunce::canonicalize(args.output_directory)?;
 
-    Ok((database_path, output_directory))
+    Ok(Args {
+        database_path,
+        output_directory,
+        ..args
+    })
 }
 
 fn main() -> anyhow::Result<()> {
-    let (database_path, output_directory) = parse_args()?;
+    let args = parse_args()?;
     let wiki_parser = parse_wiki_text::Configuration::new(&CONFIGURATION_SOURCE);
 
-    let conn = rusqlite::Connection::open(database_path)?;
+    let conn = rusqlite::Connection::open(args.database_path)?;
     let mut stmt = conn.prepare(
         r#"
         SELECT
@@ -144,7 +161,7 @@ fn main() -> anyhow::Result<()> {
         .filter(|(title, _)| !title.to_lowercase().contains("/sandbox"))
         .filter(|(title, _)| !title.starts_with("''"))
     {
-        write_file(&wiki_parser, &output_directory, title, text)?;
+        write_file(&wiki_parser, args.mode, &args.output_directory, title, text)?;
     }
 
     Ok(())
@@ -152,6 +169,7 @@ fn main() -> anyhow::Result<()> {
 
 fn write_file(
     wiki_parser: &parse_wiki_text::Configuration,
+    mode: Mode,
     output_directory: &Path,
     title: String,
     text: String,
@@ -162,31 +180,39 @@ fn write_file(
 
     let path: PathBuf = std::iter::once(output_directory)
         .chain(components.iter().map(Path::new))
-        .collect::<PathBuf>()
-        .with_extension("md");
+        .collect::<PathBuf>();
 
-    std::fs::create_dir_all(path.parent().context("failed to get parent path")?)?;
-    let mut file = File::create(path)?;
-    writeln!(file, "# {}\n", title)?;
+    fs::create_dir_all(path.parent().context("failed to get parent path")?)?;
 
-    let ast = wiki_parser.parse(&text);
-    let written = old_and_bad::write_nodes_with_affix(
-        &mut file,
-        ast.nodes.iter(),
-        |_| Ok(()),
-        |f| writeln!(f),
-    )?;
+    match mode {
+        Mode::Wikitext => {
+            fs::write(path.with_extension("wikitext"), text)?;
+        }
+        Mode::Markdown => todo!(),
+        Mode::OldAndBad => {
+            let path = path.with_extension("md");
+            let mut file = File::create(path)?;
+            writeln!(file, "# {}\n", title)?;
 
-    if !written {
-        writeln!(file)?;
-        writeln!(file)?;
-        writeln!(file)?;
-        for node in &ast.nodes {
-            writeln!(file, "{:?}", node)?;
+            let ast = wiki_parser.parse(&text);
+
+            let written = old_and_bad::write_nodes_with_affix(
+                &mut file,
+                ast.nodes.iter(),
+                |_| Ok(()),
+                |f| writeln!(f),
+            )?;
+
+            if !written {
+                writeln!(file)?;
+                writeln!(file, "```")?;
+                for node in &ast.nodes {
+                    writeln!(file, "{:?}", node)?;
+                }
+                writeln!(file, "```")?;
+            }
         }
     }
 
     Ok(())
 }
-
-mod old_and_bad;
